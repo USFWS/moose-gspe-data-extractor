@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Moose GSPE Survey Datasheet Extractor v1 Azure.
+Moose GSPE Datasheet Extractor
 
 This script manages the extraction and digitization of scanned Moose GSPE 
 survey datasheets using Azure OpenAI Vision. It maps page coordinates, 

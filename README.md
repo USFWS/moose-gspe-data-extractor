@@ -1,4 +1,4 @@
-# Moose GSPE Datasheet Extractor — Azure
+# Moose GSPE Datasheet Extractor
 
 A moose-specific Azure OpenAI vision extractor for scanned GSPE survey datasheets.
 
