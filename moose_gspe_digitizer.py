@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Moose GSPE Datasheet Extractor
+Moose GSPE Datasheet Extractor (Azure).
 
 This script manages the extraction and digitization of scanned Moose GSPE 
 survey datasheets using Azure OpenAI Vision. It maps page coordinates, 
@@ -1525,7 +1525,7 @@ def print_summary(result: ExtractionBatchResult, out_dir: Path, db_path: Path) -
 # GUI APP
 # ==============================================================================
 def run_gui() -> int:
-    print("Opening Moose GSPE data digitizer form in a separate window...", flush=True)
+    print("Opening Moose GSPE Datasheet Extractor in a separate window...", flush=True)
     """Launch a PySide6 review app for selecting PDFs/images, running extraction,
     reviewing/editing tables, and saving CSV/SQLite outputs.
 
@@ -1573,7 +1573,7 @@ def run_gui() -> int:
     class ImagePreviewWindow(QMainWindow):
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Moose Survey Form - Original Document Preview")
+            self.setWindowTitle("Moose GSPE Datasheet - Original Document Preview")
             self.resize(850, 1100)
             self._base_pixmap = None   # full-resolution source
             self._zoom = 1.0
@@ -2016,7 +2016,7 @@ def run_gui() -> int:
     class MainWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle(f"Moose GSPE Digitizer ({APP_VERSION})")
+            self.setWindowTitle(f"Moose GSPE Datasheet Extractor ({APP_VERSION})")
             self.resize(1400, 900)
             self.settings = QSettings("MooseGSPE", "AzureExtractor")
             self.queue = deque()

@@ -1,8 +1,10 @@
 # Moose GSPE Datasheet Extractor
 
-A moose-specific Azure OpenAI vision extractor for scanned GSPE survey datasheets.
+Version 0.0.1
 
-The app treats **each PDF page as one survey unit** keyed by the page's `SU #` value. It renders every PDF page to an image, sends the page image to a vision-capable Azure OpenAI deployment, and returns editable tables for review. Pages within a file are processed in parallel, extracted values are validated and flagged for the reviewer, and reviewed data is upserted into CSV and SQLite so work accumulates across sessions.
+A vision-model extractor for scanned moose GSPE survey datasheets.
+
+The app treats **each PDF page as one survey unit** keyed by the page's `SU #` value. It renders every PDF page to an image, sends the page image to a vision-capable model deployment, and returns editable tables for review. Pages within a file are processed in parallel, extracted values are validated and flagged for the reviewer, and reviewed data is upserted into CSV and SQLite so work accumulates across sessions.
 
 ## Files
 
@@ -10,7 +12,7 @@ The app treats **each PDF page as one survey unit** keyed by the page's `SU #` v
 - `prompt.md` — moose-specific extraction prompt. Keep it beside the Python file unless you set `MOOSE_PROMPT_PATH`. The app also falls back to an extensionless `prompt` for compatibility.
 - `.env` — your Azure settings. Create this beside the Python file.
 - `preprocess_dpi_sweep.py` — optional. Scores preprocessing method x DPI combinations against a ground-truth JSON to pick settings empirically.
-- `check_json_schema_support.py` — optional. One-shot probe that reports whether your deployment accepts structured outputs (`response_format` `json_schema`).
+- `check_json_schema_support.py` — optional. One-shot probe that reports whether the current backend accepts structured outputs (`response_format` `json_schema`).
 
 ## Install
 
@@ -20,16 +22,22 @@ pip install pandas Pillow python-dotenv openai pymupdf PySide6
 
 `pymupdf` is required for PDF support. `PySide6` is required for the review app.
 
+## Provider backend
+
+The extraction pipeline, review UI, validation, and storage are provider-neutral by design. The **current backend is Azure OpenAI**, so the connection settings below use Azure's names and conventions. Support for other vision-model providers is planned; when added, only the connection settings and the client layer change, not the review or output behavior described in this document.
+
 ## .env
+
+Create a `.env` file beside the script with your model connection settings. For the current Azure backend:
 
 ```text
 API_ENDPOINT=https://your-resource.openai.azure.com/
-API_KEY=your-azure-openai-key
+API_KEY=your-api-key
 API_VERSION=2024-12-01-preview
 API_DEPLOYMENT_NAME=your-vision-model-deployment-name
 ```
 
-Do not set `API_DEPLOYMENT_NAME` to the API version. It must be the Azure deployment name for a vision-capable model.
+`API_DEPLOYMENT_NAME` must be the name of a vision-capable model deployment. Do not set it to the API version.
 
 ### Optional settings
 
@@ -48,10 +56,10 @@ MOOSE_MAX_RETRIES=4
 MOOSE_RETRY_BASE_DELAY=1.0
 MOOSE_RETRY_MAX_DELAY=30.0
 
-# Structured outputs spike (off by default)
+# Structured outputs (off by default; see note below)
 MOOSE_USE_JSON_SCHEMA=0
 
-# Azure reasoning effort (only if your deployment supports it)
+# Provider-specific: reasoning effort (only if the backend supports it)
 AZURE_INCLUDE_REASONING_EFFORT=0
 REASONING_EFFORT=medium
 
@@ -64,9 +72,9 @@ Notes on the optional settings:
 
 - `MOOSE_RENDER_DPI` defaults to 150. Higher DPI increases detail, upload size, and latency. Use the sweep script to choose empirically.
 - Default preprocessing is `none` (the raw render is sent). Other modes are available in the GUI and via the CLI `--preprocess` flag.
-- `MOOSE_REQUEST_TIMEOUT` is seconds per Azure call; `0` means no bound. Setting it also caps how long a cancelled request can linger.
-- Retry settings control exponential backoff with jitter on transient errors; `Retry-After` is honored when Azure sends it.
-- `MOOSE_USE_JSON_SCHEMA=1` asks the model to conform to a JSON schema. Support varies by deployment and API version; if the deployment rejects it, the app automatically falls back to plain JSON. Run `check_json_schema_support.py` first.
+- `MOOSE_REQUEST_TIMEOUT` is seconds per model call; `0` means no bound. Setting it also caps how long a cancelled request can linger.
+- Retry settings control exponential backoff with jitter on transient errors; a provider-supplied `Retry-After` is honored when present.
+- `MOOSE_USE_JSON_SCHEMA=1` asks the model to conform to a JSON schema (structured outputs). Support depends on the backend and version; if the backend rejects it, the app automatically falls back to plain JSON. The reasoning-effort settings are likewise backend-specific and ignored where unsupported.
 - If `FEW_SHOT_IMAGE` points at the same page you are extracting, the app skips the example for that page so it is not shown its own answer.
 
 ## Run the GUI app
@@ -141,7 +149,7 @@ python moose_gspe_digitizer.py path\to\datasheet.pdf --preflight-only
 
 ## Helper scripts
 
-Check whether structured outputs are supported on your deployment:
+Check whether structured outputs are supported on the current backend:
 
 ```powershell
 python check_json_schema_support.py --module moose_gspe_digitizer.py
