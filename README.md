@@ -1,6 +1,8 @@
-# Moose GSPE Datasheet Extractor
+[![Lifecycle: stable](https://img.shields.io/badge/lifecycle-stable-green.svg)](https://lifecycle.r-lib.org/articles/stages.html#stable)
 
-Version 0.0.1
+[![AI Assisted](https://shields.io)](#ai-disclosure)
+
+# Moose GSPE Data Extractor
 
 A vision-model extractor for scanned moose GSPE survey datasheets.
 
@@ -162,3 +164,21 @@ python preprocess_dpi_sweep.py --module moose_gspe_digitizer.py --input demo_dat
 ```
 
 The sweep disables the few-shot example when it overlaps the test page, so scores are not inflated by showing the model its own answer.
+
+### AI Disclosure
+
+This project utilizes a hybrid human-AI development workflow. Code generation tools were used for scaffolding and boilerplate, while logic, testing, and security verification were executed entirely by the author.
+
+## Getting help
+
+Contact the [project maintainer](mailto:mccrea_cobb@fws.gov) for help with this repository. If you have general questions on creating repositories in the USFWS DGEC, reach out to a USFWS DGEC [owner](https://github.com/orgs/USFWS/people?query=role%3Aowner).
+
+## Contribute
+
+Contact the [project maintainer](mailto:mccrea_cobb@fws.gov) for information about contributing to this repository. Submit a [GitHub Issue](https://github.com/USFWS/fws-repo-template/issues) to report a bug or request a feature or enhancement.
+
+-----
+
+![](https://i.creativecommons.org/l/zero/1.0/88x31.png) This work is
+licensed under a [Creative Commons Zero Universal v1.0
+License](https://creativecommons.org/publicdomain/zero/1.0/).

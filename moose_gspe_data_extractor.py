@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Moose GSPE Datasheet Extractor (Azure).
+Moose GSPE Data Extractor
+
+Generated with AI assistance. 
+Reviewed, modified, and verified by McCrea Cobb on 2026-11-03.
 
 This script manages the extraction and digitization of scanned Moose GSPE 
-survey datasheets using Azure OpenAI Vision. It maps page coordinates, 
-manages human verification reviews via PySide6, and separates raw vs. QC'ed 
-ground-truth JSONs for model evaluation.
+survey datasheets. It maps page coordinates, manages human verification 
+reviews via PySide6, and separates raw vs. QC'ed ground-truth JSONs for 
+model evaluation.
 
 Each PDF page is treated as one unique survey unit page keyed by SU #.
 
@@ -169,7 +172,7 @@ CONDITION_COLS = [
 ]
 
 UNIT_COLS = [
-    "survey_unit_guid", "source_file", "source_page", "survey_date", "su_number", "gmu", "start_time", "stop_time",
+    "survey_unit_guid", "source_file", "source_path", "source_page", "survey_date", "su_number", "gmu", "start_time", "stop_time",
     "elapsed", "computed_elapsed_minutes", "computed_elapsed_hhmm", "location", "observer", "pilot",
     "strata", "aircraft_type", "temp_f", "area_mi2", "overall_survey_rating", "snow_age",
     "light_type", "snow_cover", "light_intensity", "predominant_habitat_type",
@@ -1140,6 +1143,9 @@ def _extract_one_page(
     raw_path = raw_dir / f"{path.stem}_p{page_number:03d}.json"
     raw_path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     unit, groups, summaries = normalize_extraction(obj, path.name, page_number)
+    # Persist the absolute source path so a reopened session can locate the
+    # original PDF/image for side-by-side QC without asking the user.
+    unit["source_path"] = str(path.resolve())
     # If the Azure call fell back to altered parameters (for example losing
     # temperature=0), note it so a reviewer knows the result may differ from a
     # deterministic run.
@@ -1371,6 +1377,36 @@ def _export_tables_to_csv(conn, out_dir: Path) -> None:
         if table == "llm_runs":
             df = df.drop(columns=["raw_response_text"], errors="ignore")
         df.to_csv(out_dir / fname, index=False)
+
+
+def load_outputs(db_path: Path = DEFAULT_DB_PATH) -> ExtractionBatchResult:
+    """Load a previously saved SQLite database back into an ExtractionBatchResult
+    for QC. Tables are reindexed to the expected columns so the review UI and a
+    later re-save (upsert by GUID) behave exactly like a fresh run. Rows keep
+    their original survey_unit_guid, so editing and saving updates the same
+    records rather than duplicating them.
+    """
+    db_path = Path(db_path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"No database found at {db_path}")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        def read(tbl: str) -> pd.DataFrame:
+            try:
+                return pd.read_sql_query(f'SELECT * FROM "{tbl}"', conn)
+            except Exception:
+                return pd.DataFrame()
+        units = read("survey_units").reindex(columns=UNIT_COLS)
+        groups = read("moose_groups").reindex(columns=[
+            "survey_unit_guid", "source_file", "source_page", "su_number",
+        ] + GROUP_COLS)
+        summaries = read("survey_summaries").reindex(columns=[
+            "survey_unit_guid", "source_file", "source_page", "su_number", "summary_row",
+        ] + COUNT_COLS + ["total_moose", "computed_total_moose"])
+        runs = read("llm_runs")
+    finally:
+        conn.close()
+    return ExtractionBatchResult(units, groups, summaries, runs, db_path.parent / "raw_page_json")
 
 
 def write_outputs(result: ExtractionBatchResult, out_dir: Path = DEFAULT_OUTPUT_DIR, db_path: Path = DEFAULT_DB_PATH) -> None:
@@ -2210,9 +2246,11 @@ def run_gui() -> int:
             file_menu = self.menuBar().addMenu("File")
             a_add = QAction("Browse & Queue PDFs/Images…", self); a_add.triggered.connect(self.browse_files)
             a_folder = QAction("Queue All PDFs in Folder…", self); a_folder.triggered.connect(self.browse_folder)
+            a_open = QAction("Open Saved Output for QC…", self); a_open.setShortcut("Ctrl+O"); a_open.triggered.connect(self.open_saved_output)
+            a_pdf = QAction("Set Original PDF Folder…", self); a_pdf.triggered.connect(self.set_pdf_folder)
             a_save = QAction("Save Reviewed Tables", self); a_save.triggered.connect(self.save_reviewed_outputs)
             a_exit = QAction("Exit", self); a_exit.triggered.connect(self.close)
-            file_menu.addActions([a_add, a_folder, a_save, a_exit])
+            file_menu.addActions([a_add, a_folder, a_open, a_pdf, a_save, a_exit])
             tools_menu = self.menuBar().addMenu("Tools")
             a_az = QAction("Configure Azure for Session…", self); a_az.triggered.connect(self.configure_azure)
             a_out = QAction("Choose Output Folder…", self); a_out.triggered.connect(self.choose_output_dir)
@@ -2230,6 +2268,78 @@ def run_gui() -> int:
             if self.preview_window is not None:
                 self.tile_windows(force=True)
 
+        def open_saved_output(self):
+            if self.worker:
+                QMessageBox.warning(self, "Busy", "Cancel the running extraction before opening saved output.")
+                return
+            start = str(self.output_dir)
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open saved output database", start,
+                "SQLite database (*.sqlite *.db);;All files (*)")
+            if not path:
+                return
+            try:
+                result = load_outputs(Path(path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Open Error", f"{type(exc).__name__}: {exc}")
+                return
+            if not isinstance(result.survey_units, pd.DataFrame) or result.survey_units.empty:
+                QMessageBox.information(self, "Nothing to load", "That database has no survey units.")
+                return
+            # Point outputs at the opened database so saving upserts back into it.
+            self.db_path = Path(path)
+            self.output_dir = Path(path).parent
+            self.out_dir_edit.setText(str(self.output_dir))
+            self.current_result = result
+            # Used only as a dict key and label here; per-page preview resolves
+            # its own PDF from each row's source_path.
+            self.current_file_path = Path(path)
+            self.processed_results[str(path)] = result
+            self.display_result(result)
+            n = len(result.survey_units)
+            self.current_file_label.setText(f"<b>Loaded for QC:</b> {Path(path).name} ({n} page(s))")
+            self._update_status(f"Loaded {n} page(s) from {Path(path).name}. Edit and Save to update the same records.")
+
+        def set_pdf_folder(self):
+            start = self.settings.value("last_browse_dir", str(Path.home()), type=str)
+            d = QFileDialog.getExistingDirectory(self, "Choose folder containing the original PDFs/images", start)
+            if not d:
+                return
+            dirs = list(getattr(self, "_pdf_dirs", []))
+            if d not in dirs:
+                dirs.append(d)
+            self._pdf_dirs = dirs
+            self._update_status(f"Looking for original documents in: {d}")
+            self._update_original_page_preview()
+
+        def _resolve_page_pdf(self, rec) -> Optional[Path]:
+            """Find the original PDF/image for a survey-unit row.
+
+            Order: persisted absolute source_path, then any folder the user set
+            via Set Original PDF Folder (matched by file name), then the current
+            file if it is itself a document. Returns None if nothing is found;
+            the caller then shows no preview rather than prompting repeatedly.
+            """
+            doc_exts = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+            sp = rec.get("source_path")
+            if sp is not None and not _gui_is_blank(sp):
+                p = Path(str(sp))
+                if p.exists():
+                    return p
+            name = rec.get("source_file")
+            if name is not None and not _gui_is_blank(name):
+                for d in getattr(self, "_pdf_dirs", []):
+                    cand = Path(d) / str(name)
+                    if cand.exists():
+                        return cand
+            cfp = self.current_file_path
+            if cfp is not None:
+                cfp = Path(cfp)
+                if cfp.suffix.lower() in doc_exts and cfp.exists():
+                    if name is None or _gui_is_blank(name) or cfp.name == str(name):
+                        return cfp
+            return None
+
         def _azure_status_text(self) -> str:
             cfg = load_azure_config_from_script_env()
             endpoint = os.getenv("API_ENDPOINT") or cfg.get("API_ENDPOINT") or ""
@@ -2237,6 +2347,78 @@ def run_gui() -> int:
             if endpoint and dep:
                 return f"Configured: {endpoint} · deployment={dep}"
             return "Not configured. Add .env beside this script or use Configure Azure."
+
+        def open_saved_output(self):
+            if self.worker:
+                QMessageBox.warning(self, "Busy", "Cancel the running extraction before opening saved output.")
+                return
+            start = str(self.output_dir)
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open saved output database", start,
+                "SQLite database (*.sqlite *.db);;All files (*)")
+            if not path:
+                return
+            try:
+                result = load_outputs(Path(path))
+            except Exception as exc:
+                QMessageBox.critical(self, "Open Error", f"{type(exc).__name__}: {exc}")
+                return
+            if not isinstance(result.survey_units, pd.DataFrame) or result.survey_units.empty:
+                QMessageBox.information(self, "Nothing to load", "That database has no survey units.")
+                return
+            # Point outputs at the opened database so saving upserts back into it.
+            self.db_path = Path(path)
+            self.output_dir = Path(path).parent
+            self.out_dir_edit.setText(str(self.output_dir))
+            self.current_result = result
+            # Used only as a dict key and label here; per-page preview resolves
+            # its own PDF from each row's source_path.
+            self.current_file_path = Path(path)
+            self.processed_results[str(path)] = result
+            self.display_result(result)
+            n = len(result.survey_units)
+            self.current_file_label.setText(f"<b>Loaded for QC:</b> {Path(path).name} ({n} page(s))")
+            self._update_status(f"Loaded {n} page(s) from {Path(path).name}. Edit and Save to update the same records.")
+
+        def set_pdf_folder(self):
+            start = self.settings.value("last_browse_dir", str(Path.home()), type=str)
+            d = QFileDialog.getExistingDirectory(self, "Choose folder containing the original PDFs/images", start)
+            if not d:
+                return
+            dirs = list(getattr(self, "_pdf_dirs", []))
+            if d not in dirs:
+                dirs.append(d)
+            self._pdf_dirs = dirs
+            self._update_status(f"Looking for original documents in: {d}")
+            self._update_original_page_preview()
+
+        def _resolve_page_pdf(self, rec) -> Optional[Path]:
+            """Find the original PDF/image for a survey-unit row.
+
+            Order: persisted absolute source_path, then any folder the user set
+            via Set Original PDF Folder (matched by file name), then the current
+            file if it is itself a document. Returns None if nothing is found;
+            the caller then shows no preview rather than prompting repeatedly.
+            """
+            doc_exts = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+            sp = rec.get("source_path")
+            if sp is not None and not _gui_is_blank(sp):
+                p = Path(str(sp))
+                if p.exists():
+                    return p
+            name = rec.get("source_file")
+            if name is not None and not _gui_is_blank(name):
+                for d in getattr(self, "_pdf_dirs", []):
+                    cand = Path(d) / str(name)
+                    if cand.exists():
+                        return cand
+            cfp = self.current_file_path
+            if cfp is not None:
+                cfp = Path(cfp)
+                if cfp.suffix.lower() in doc_exts and cfp.exists():
+                    if name is None or _gui_is_blank(name) or cfp.name == str(name):
+                        return cfp
+            return None
 
         def configure_azure(self):
             dlg = AzureSetupDialog(self)
@@ -2527,6 +2709,24 @@ def run_gui() -> int:
             self.ds_field_widgets: dict[str, QLineEdit] = {}
             self.ds_text_widgets: dict[str, QTextEdit] = {}
             self.ds_condition_widgets: dict[str, QCheckBox] = {}
+            self.ds_combo_widgets: dict[str, QComboBox] = {}
+
+            def make_vocab_combo(col: str, width: int = 180) -> QComboBox:
+                # Dropdown populated from the controlled vocabulary for this
+                # field. Editable so a value outside the allowed set (older data
+                # or a flagged misread) still displays and can be corrected;
+                # the list offers the canonical choices. Signals are connected
+                # after items are added so population does not write spuriously.
+                cb = QComboBox()
+                cb.setEditable(True)
+                cb.setMinimumWidth(width)
+                cb.addItem("")  # allow blank / null
+                for canon in CATEGORICAL_VOCAB.get(col, {}).keys():
+                    cb.addItem(canon)
+                cb.setCurrentIndex(0)
+                cb.currentTextChanged.connect(lambda text, col=col: self._write_datasheet_field(col, text))
+                self.ds_combo_widgets[col] = cb
+                return cb
 
             header_group = QGroupBox("Survey Unit Header")
             header_grid = QGridLayout(header_group)
@@ -2568,11 +2768,7 @@ def run_gui() -> int:
             overall_group = QGroupBox("Overall Survey Rating")
             overall_grid = QGridLayout(overall_group)
             overall_grid.addWidget(QLabel("OVERALL SURVEY RATING:"), 0, 0)
-            w = QLineEdit()
-            w.setMinimumWidth(260)
-            w.editingFinished.connect(lambda col="overall_survey_rating", w=w: self._write_datasheet_field(col, w.text()))
-            self.ds_field_widgets["overall_survey_rating"] = w
-            overall_grid.addWidget(w, 0, 1)
+            overall_grid.addWidget(make_vocab_combo("overall_survey_rating", 260), 0, 1)
             overall_grid.setColumnStretch(2, 1)
             sheet_layout.addWidget(overall_group)
 
@@ -2582,10 +2778,13 @@ def run_gui() -> int:
             def add_search_field(label, col, row, col_pair, width=180):
                 c = col_pair * 2
                 search_grid.addWidget(QLabel(label + ":"), row, c)
-                w = QLineEdit()
-                w.setMinimumWidth(width)
-                w.editingFinished.connect(lambda col=col, w=w: self._write_datasheet_field(col, w.text()))
-                self.ds_field_widgets[col] = w
+                if col in CATEGORICAL_VOCAB:
+                    w = make_vocab_combo(col, width)
+                else:
+                    w = QLineEdit()
+                    w.setMinimumWidth(width)
+                    w.editingFinished.connect(lambda col=col, w=w: self._write_datasheet_field(col, w.text()))
+                    self.ds_field_widgets[col] = w
                 search_grid.addWidget(w, row, c + 1)
 
             # Match the paper form: left column is snow age/light type,
@@ -2851,6 +3050,11 @@ def run_gui() -> int:
                 val = rec.get(col, False)
                 cb.setChecked(str(val).strip().lower() in {"true", "1", "yes", "y", "checked", "x"})
                 cb.blockSignals(False)
+            for col, combo in getattr(self, "ds_combo_widgets", {}).items():
+                combo.blockSignals(True)
+                val = rec.get(col, "")
+                combo.setCurrentText("" if pd.isna(val) else str(val))
+                combo.blockSignals(False)
 
         def _sync_datasheet_fields(self):
             if not hasattr(self, "ds_page_combo"):
@@ -2861,6 +3065,8 @@ def run_gui() -> int:
                 self._write_datasheet_field(col, w.toPlainText())
             for col, cb in getattr(self, "ds_condition_widgets", {}).items():
                 self._write_datasheet_field(col, bool(cb.isChecked()))
+            for col, combo in getattr(self, "ds_combo_widgets", {}).items():
+                self._write_datasheet_field(col, combo.currentText())
 
         def _on_datasheet_page_changed(self, _idx: int):
             self._populate_datasheet_fields()
@@ -2930,32 +3136,36 @@ def run_gui() -> int:
             self._tiled_once = True
 
         def _update_original_page_preview(self):
-            if self.current_file_path is None:
-                return
             if not self.pop_image_chk.isChecked():
                 return
-            path = Path(self.current_file_path)
-            if not path.exists():
-                return
-            
             row = self._current_datasheet_row()
             model = self.table_models.get("survey_units")
             if row is None or model is None or row >= len(model._df):
                 return
             rec = model._df.iloc[row]
             source_page = int(rec.get("source_page") or 1)
-            
+            # Resolve this page's original document (works for both freshly
+            # processed files and saved output opened later for QC).
+            pdf_path = self._resolve_page_pdf(rec)
+            if pdf_path is None:
+                if not self.preview_window:
+                    self.preview_window = ImagePreviewWindow(self)
+                self.preview_window.label.setText(
+                    "Original document not found.\nUse File > Set Original PDF Folder…")
+                self.preview_window.show()
+                return
+
             if not self.preview_window:
                 self.preview_window = ImagePreviewWindow(self)
-                
-            ext = path.suffix.lower()
+
+            ext = pdf_path.suffix.lower()
             try:
                 if ext == ".pdf":
                     if not PDF_SUPPORT_ENABLED:
                         self.preview_window.label.setText("Install PyMuPDF (pymupdf) to preview PDFs")
                         self.preview_window.show()
                         return
-                    doc = fitz.open(str(path))
+                    doc = fitz.open(str(pdf_path))
                     try:
                         page = doc.load_page(source_page - 1)
                         # Render at a higher DPI than the window needs so zooming
@@ -2967,10 +3177,10 @@ def run_gui() -> int:
                         self.preview_window.set_pixmap(pixmap)
                     finally:
                         doc.close()
-                elif ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp"}:
-                    pixmap = QPixmap(str(path))
+                elif ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}:
+                    pixmap = QPixmap(str(pdf_path))
                     self.preview_window.set_pixmap(pixmap)
-                
+
                 self.preview_window.show()
                 # Auto-tile only the first time the preview opens this session;
                 # after that the reviewer's own window placement is left alone.
