@@ -1,7 +1,6 @@
 [![Lifecycle: stable](https://img.shields.io/badge/lifecycle-stable-green.svg)](https://lifecycle.r-lib.org/articles/stages.html#stable)
 
-[![AI Assisted](https://img.shields.io/badge/AI_Assisted-red?style=plastic
-](#ai-disclosure)
+[![AI Assisted](https://img.shields.io/badge/AI_Assisted-red?style=plastic)](#ai-disclosure)
 
 # Moose GSPE Data Extractor
 
