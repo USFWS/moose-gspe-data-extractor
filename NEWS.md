@@ -2,11 +2,11 @@
 
 All notable changes to the **Moose GSPE Data Extractor** will be documented in this file.
 
-## [0.0.1] - 2026-11-03
+## 0.0.1
 
 ### Initial Release
 
-This is the initial release of the **Moose GSPE Data Extractor** (v0.0.1), a specialized system designed to digitize, validate, and human-verify handwritten Moose Geographic Stratified Population Estimation (GSPE) survey datasheets using Azure OpenAI's vision models.
+This is the initial release of the **Moose GSPE Data Extractor** (v0.0.1), a specialized system designed to digitize, validate, and human-verify handwritten Moose GeoSpatial Population Estimation (GSPE) survey datasheets using Azure OpenAI's vision models.
 
 ### Added
 - **AI-Powered Vision Extraction**:
